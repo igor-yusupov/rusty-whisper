@@ -8,7 +8,7 @@ readme = "README.md"
 keywords = [
     "deep-learning",
     "machine-learning",
-    "speech recognition",
+    "speech_recognition",
     "whisper",
 ]
 description = "Rust implementation of Whisper"
