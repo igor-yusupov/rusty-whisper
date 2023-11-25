@@ -1,6 +1,6 @@
 [package]
 name = "rusty-whisper"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 authors = ["Igor Yusupov"]
@@ -14,7 +14,10 @@ keywords = [
 description = "Rust implementation of Whisper"
 repository = "https://github.com/igor-yusupov/rusty-yolo/"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+exclude = [
+    "data/*",
+    "weights/*",
+]
 
 [lib]
 name = "rusty_whisper"
@@ -22,3 +25,12 @@ path = "src/lib.rs"
 crate-type = ["lib"]
 
 [dependencies]
+base64 = "0.21.4"
+hound = "3.5.1"
+ndarray = "0.15.6"
+ndarray-npy = "0.8.1"
+rayon = "1.8.0"
+rustc-hash = "1.1.0"
+rustfft = "6.1.0"
+tiktoken-rs = "0.5.3"
+tract-onnx = "0.20.21"
