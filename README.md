@@ -1,6 +1,7 @@
 # rusty-whisper
 
 Rust implementation of Whisper. More information about model: https://github.com/openai/whisper
+This crate is based on [tract](https://github.com/sonos/tract).
 
 ## Quick start
 
