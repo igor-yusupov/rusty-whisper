@@ -1,6 +1,6 @@
 [package]
 name = "rusty-whisper"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 authors = ["Igor Yusupov"]
@@ -8,7 +8,7 @@ readme = "README.md"
 keywords = [
     "deep-learning",
     "machine-learning",
-    "speech_recognition",
+    "speech-recognition",
     "whisper",
 ]
 description = "Rust implementation of Whisper"
