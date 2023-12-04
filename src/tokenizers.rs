@@ -7,13 +7,14 @@ use tiktoken_rs::CoreBPE;
 #[derive(Debug)]
 pub struct Tokenizer {
     bpe: CoreBPE,
+    pub lang2token: HashMap<String, usize>,
 }
 
 impl Tokenizer {
     pub fn new(vocab_path: &str) -> Tokenizer {
         let mut file = File::open(vocab_path).expect("Не удалось открыть файл");
 
-        let languages: HashMap<&str, &str> = [
+        let langs = vec![
             ("en", "english"),
             ("zh", "chinese"),
             ("de", "german"),
@@ -113,10 +114,8 @@ impl Tokenizer {
             ("ba", "bashkir"),
             ("jw", "javanese"),
             ("su", "sundanese"),
-        ]
-        .iter()
-        .cloned()
-        .collect();
+        ];
+        let languages: HashMap<&str, &str> = langs.iter().cloned().collect();
 
         let mut contents = String::new();
         file.read_to_string(&mut contents)
@@ -176,7 +175,18 @@ impl Tokenizer {
             "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+",
         )
         .unwrap();
-        Tokenizer { bpe }
+
+        let lang2token: HashMap<String, usize> = langs
+            .iter()
+            .enumerate()
+            .map(|(index, pairs)| {
+                (
+                    String::from(pairs.0),
+                    bpe.encode_with_special_tokens("<|startoftranscript|>")[0] + index,
+                )
+            })
+            .collect();
+        Tokenizer { bpe, lang2token }
     }
 
     // pub fn encode(&self, text: &str) -> Vec<usize> {

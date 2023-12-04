@@ -8,6 +8,6 @@ fn main() {
         "weights/positional_embedding.npz",
         "weights/mel_filters.npz",
     );
-    let result = whisper.recognize_from_audio("data/audio.wav", 8);
+    let result = whisper.recognize_from_audio("data/audio.wav", 1, "en");
     println!("{}", result);
 }
