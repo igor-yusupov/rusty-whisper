@@ -79,13 +79,17 @@ impl Whisper {
 
         if prompt.len() > 0 {
             let prev_prompt_len = self.options.n_ctx / 2 - 1;
+            let prompt_tokens: Vec<i32>;
+
+            if prompt.len() > prev_prompt_len {
+                prompt_tokens = prompt[prompt.len() - prev_prompt_len..].to_vec();
+            } else {
+                prompt_tokens = prompt;
+            }
+
             let tokens: Vec<i32> = vec![self.options.sot_prev as i32]
                 .into_iter()
-                .chain(
-                    prompt[prompt.len() - prev_prompt_len..]
-                        .to_owned()
-                        .into_iter(),
-                )
+                .chain(prompt_tokens.into_iter())
                 .collect();
             let tokens: Vec<i32> = tokens.into_iter().chain(init_tokens.into_iter()).collect();
             tokens
@@ -185,9 +189,7 @@ impl Whisper {
             beam.kv_cache.clone(),
             initial_token_length,
         );
-        println!("{:?}", logits.shape());
         let prob = logits.slice(s![.., -1, ..]);
-        println!("{:?}", prob.shape());
         let exp_sum = prob.mapv(|x| x.exp()).sum();
 
         let prob = prob.mapv(|x| x.exp() / exp_sum);
@@ -270,9 +272,10 @@ impl Whisper {
     fn inference(
         &self,
         audio_features: ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>>,
+        prompt: Vec<i32>,
         language: &str,
     ) -> Vec<i32> {
-        let initial_tokens = self.get_initial_tokens(vec![], language);
+        let initial_tokens = self.get_initial_tokens(prompt, language);
         let initial_token_length = initial_tokens.len();
 
         let mut tokens: Array<i32, Dim<[usize; 2]>> =
@@ -295,14 +298,14 @@ impl Whisper {
                 .map(|(i, _)| i as usize)
                 .unwrap();
 
-            let next_word_array = Array::from_elem((1, 1), next_word as i32);
-            tokens = concatenate!(Axis(1), tokens, next_word_array);
-
             if next_word == self.options.eot_token || tokens.shape()[1] > self.options.n_ctx {
                 break;
             }
-        }
 
+            let next_word_array = Array::from_elem((1, 1), next_word as i32);
+            tokens = concatenate!(Axis(1), tokens, next_word_array);
+        }
+        tokens = tokens.slice(s![.., initial_token_length..]).to_owned();
         return tokens.into_raw_vec();
     }
 
@@ -338,10 +341,20 @@ impl Whisper {
                 })
                 .collect();
         } else {
-            result = segments
+            let audio_features: Vec<ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>>> = segments
                 .par_iter()
-                .map(|segment| self.inference(self.get_audio_features(segment.clone()), language))
+                .map(|segment| self.get_audio_features(segment.clone()))
                 .collect();
+            let mut all_tokens: Vec<i32> = vec![];
+            for audio_feature in audio_features {
+                let tokens = self.inference(audio_feature, all_tokens.clone(), language);
+                all_tokens.extend(tokens.clone());
+            }
+            result = vec![all_tokens]
+            // result = segments
+            //     .par_iter()
+            //     .map(|segment| self.inference(self.get_audio_features(segment.clone()), language))
+            //     .collect();
         }
 
         let final_result: Vec<i32> = result.into_iter().flat_map(|v| v.into_iter()).collect();
