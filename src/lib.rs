@@ -1,15 +1,13 @@
 mod audio;
-mod decode;
 mod tokenizers;
 mod utils;
 
 use audio::{get_mel_filteres, read_audio};
-use decode::GreedyDecoder;
 use ndarray_npy::NpzReader;
 use rayon::prelude::*;
 use std::fs::File;
 use tokenizers::Tokenizer;
-use tract_ndarray::{s, Array, Array2, ArrayBase, Axis, Dim, IxDynImpl, OwnedRepr};
+use tract_ndarray::{concatenate, s, Array, Array2, ArrayBase, Axis, Dim, IxDynImpl, OwnedRepr};
 use tract_onnx::prelude::*;
 use utils::{KVCache, Options};
 
@@ -75,19 +73,23 @@ impl Whisper {
         encoder_out
     }
 
-    fn get_initial_tokens(&self, prompt: Vec<i32>) -> Vec<i32> {
-        let n_ctx = 448;
-        let init_tokens: Vec<i32> = vec![50258, 50259, 50359];
+    fn get_initial_tokens(&self, prompt: Vec<i32>, language: &str) -> Vec<i32> {
+        let lang_token = self.tokenizer.lang2token.get(language).unwrap();
+        let init_tokens: Vec<i32> = vec![50258, *lang_token as i32, 50359];
 
         if prompt.len() > 0 {
-            let prev_prompt_len = n_ctx / 2 - 1;
+            let prev_prompt_len = self.options.n_ctx / 2 - 1;
+            let prompt_tokens: Vec<i32>;
+
+            if prompt.len() > prev_prompt_len {
+                prompt_tokens = prompt[prompt.len() - prev_prompt_len..].to_vec();
+            } else {
+                prompt_tokens = prompt;
+            }
+
             let tokens: Vec<i32> = vec![self.options.sot_prev as i32]
                 .into_iter()
-                .chain(
-                    prompt[prompt.len() - prev_prompt_len..]
-                        .to_owned()
-                        .into_iter(),
-                )
+                .chain(prompt_tokens.into_iter())
                 .collect();
             let tokens: Vec<i32> = tokens.into_iter().chain(init_tokens.into_iter()).collect();
             tokens
@@ -168,13 +170,14 @@ impl Whisper {
         (logits, new_kv_cache)
     }
 
-    fn decode(&self, audio_features: ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>>) -> Vec<i32> {
-        let initial_tokens = self.get_initial_tokens(vec![]);
+    fn inference(
+        &self,
+        audio_features: ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>>,
+        prompt: Vec<i32>,
+        language: &str,
+    ) -> Vec<i32> {
+        let initial_tokens = self.get_initial_tokens(prompt, language);
         let initial_token_length = initial_tokens.len();
-
-        let n_ctx = 448;
-
-        let decoder = GreedyDecoder::new(self.options.eot_token);
 
         let mut tokens: Array<i32, Dim<[usize; 2]>> =
             Array::from_vec(initial_tokens).insert_axis(Axis(0));
@@ -188,21 +191,26 @@ impl Whisper {
                 kv_cache.clone(),
                 initial_token_length,
             );
-            // TODO: добавить logit_filters
-            let completed: bool;
-            (tokens, completed) = decoder
-                .clone()
-                .update(tokens, logits.slice(s![.., -1, ..]).to_owned());
+            let next_word = logits
+                .slice(s![.., -1, ..])
+                .iter()
+                .enumerate()
+                .max_by(|(_, u), (_, v)| u.total_cmp(v))
+                .map(|(i, _)| i as usize)
+                .unwrap();
 
-            if completed || tokens.shape()[1] > n_ctx {
+            if next_word == self.options.eot_token || tokens.shape()[1] > self.options.n_ctx {
                 break;
             }
-        }
 
+            let next_word_array = Array::from_elem((1, 1), next_word as i32);
+            tokens = concatenate!(Axis(1), tokens, next_word_array);
+        }
+        tokens = tokens.slice(s![.., initial_token_length..]).to_owned();
         return tokens.into_raw_vec();
     }
 
-    fn run(&self, mel: Array2<f32>) -> String {
+    fn run(&self, mel: Array2<f32>, language: &str) -> String {
         let num_frames = mel.shape()[1];
         let mut seek = 0;
         let mut segments = vec![];
@@ -216,20 +224,21 @@ impl Whisper {
                 segment = mel.slice(s![.., seek..]).to_owned();
             }
 
-            // let result = self.decode(audio::pad_or_trim(segment, audio::N_FRAMES))
             segments.push(audio::pad_or_trim(segment, audio::N_FRAMES));
             seek += audio::N_FRAMES;
         }
-
-        let result: Vec<Vec<i32>> = segments
+        let audio_features: Vec<ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>>> = segments
             .par_iter()
-            .map(|segment| self.decode(self.get_audio_features(segment.clone())))
+            .map(|segment| self.get_audio_features(segment.clone()))
             .collect();
-
-        let final_result: Vec<i32> = result.into_iter().flat_map(|v| v.into_iter()).collect();
+        let mut result: Vec<i32> = vec![];
+        for audio_feature in audio_features {
+            let tokens = self.inference(audio_feature, result.clone(), language);
+            result.extend(tokens.clone());
+        }
 
         self.tokenizer.decode(
-            final_result
+            result
                 .iter()
                 .map(|v| *v as usize)
                 .filter(|item| item < &50257)
@@ -237,9 +246,9 @@ impl Whisper {
         )
     }
 
-    pub fn recognize_from_audio(&self, audio_path: &str) -> String {
+    pub fn recognize_from_audio(&self, audio_path: &str, language: &str) -> String {
         let audio_data = read_audio(audio_path).unwrap();
         let mel = audio::log_mel_spectrogram(audio_data, self.mel_filters.clone());
-        self.run(mel)
+        self.run(mel, language)
     }
 }
