@@ -9,7 +9,7 @@ use std::fs::File;
 use tokenizers::Tokenizer;
 use tract_ndarray::{concatenate, s, Array, Array2, ArrayBase, Axis, Dim, IxDynImpl, OwnedRepr};
 use tract_onnx::prelude::*;
-use utils::{get_top_indices, BeamNode, KVCache, Options};
+use utils::{KVCache, Options};
 
 pub struct Whisper {
     encoder: SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>,
@@ -170,105 +170,6 @@ impl Whisper {
         (logits, new_kv_cache)
     }
 
-    fn beam_infer(
-        &self,
-        beam: BeamNode,
-        audio_features: ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>>,
-        beam_size: usize,
-        initial_token_length: usize,
-    ) -> Vec<BeamNode> {
-        if *beam.tokens.last().unwrap() == self.options.eot_token as i32
-            || beam.tokens.shape()[1] > self.options.n_ctx
-        {
-            return vec![beam];
-        }
-
-        let (logits, kv_cache) = self.inference_logits(
-            beam.tokens.clone(),
-            audio_features.clone(),
-            beam.kv_cache.clone(),
-            initial_token_length,
-        );
-        let prob = logits.slice(s![.., -1, ..]);
-        let exp_sum = prob.mapv(|x| x.exp()).sum();
-
-        let prob = prob.mapv(|x| x.exp() / exp_sum);
-
-        let top_n = get_top_indices(prob.into_raw_vec(), beam_size);
-
-        let mut new_beams = vec![];
-
-        for (_next_word, prob) in top_n.iter() {
-            let next_word = {
-                if *_next_word == 50358 {
-                    50363
-                } else {
-                    *_next_word
-                }
-            };
-            let next_word_array = Array::from_elem((1, 1), next_word as i32);
-            let new_word = concatenate!(Axis(1), beam.tokens, next_word_array);
-            let new_log_prob = beam.score + prob.ln();
-            let new_beam_node = BeamNode {
-                tokens: new_word,
-                score: new_log_prob,
-                kv_cache: kv_cache.clone(),
-            };
-            new_beams.push(new_beam_node);
-        }
-
-        return new_beams;
-    }
-
-    fn beam_search(
-        &self,
-        audio_features: ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>>,
-        beam_width: usize,
-        language: &str,
-    ) -> Vec<i32> {
-        let initial_tokens = self.get_initial_tokens(vec![], language);
-        let initial_token_length = initial_tokens.len();
-
-        let mut beams: Vec<BeamNode> = vec![BeamNode {
-            tokens: Array::from_vec(initial_tokens).insert_axis(Axis(0)),
-            score: 0.0,
-            kv_cache: KVCache::default(),
-        }];
-
-        for _ in 0..224 {
-            let vec_of_beams: Vec<Vec<BeamNode>> = beams
-                .par_iter()
-                .map(|beam| {
-                    self.beam_infer(
-                        beam.clone(),
-                        audio_features.clone(),
-                        beam_width,
-                        initial_token_length,
-                    )
-                })
-                .collect();
-            let mut new_beams: Vec<BeamNode> = vec_of_beams.into_iter().flatten().collect();
-
-            new_beams.par_sort_by(|a, b| {
-                (b.score / b.tokens.len() as f32)
-                    .partial_cmp(&(a.score / a.tokens.len() as f32))
-                    .unwrap()
-            });
-            beams = new_beams.into_iter().take(beam_width).collect();
-        }
-
-        let beam_result = beams
-            .iter()
-            .max_by(|a, b| {
-                (a.score / a.tokens.len() as f32)
-                    .partial_cmp(&(b.score / b.tokens.len() as f32))
-                    .unwrap()
-            })
-            .unwrap();
-
-        beam_result.clone().tokens.into_raw_vec()
-    }
-
     fn inference(
         &self,
         audio_features: ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>>,
@@ -309,7 +210,7 @@ impl Whisper {
         return tokens.into_raw_vec();
     }
 
-    fn run(&self, mel: Array2<f32>, beam_size: usize, language: &str) -> String {
+    fn run(&self, mel: Array2<f32>, language: &str) -> String {
         let num_frames = mel.shape()[1];
         let mut seek = 0;
         let mut segments = vec![];
@@ -323,44 +224,21 @@ impl Whisper {
                 segment = mel.slice(s![.., seek..]).to_owned();
             }
 
-            // let result = self.decode(audio::pad_or_trim(segment, audio::N_FRAMES))
             segments.push(audio::pad_or_trim(segment, audio::N_FRAMES));
             seek += audio::N_FRAMES;
         }
-        let result: Vec<Vec<i32>>;
-
-        if beam_size > 1 {
-            result = segments
-                .par_iter()
-                .map(|segment| {
-                    self.beam_search(
-                        self.get_audio_features(segment.clone()),
-                        beam_size,
-                        language,
-                    )
-                })
-                .collect();
-        } else {
-            let audio_features: Vec<ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>>> = segments
-                .par_iter()
-                .map(|segment| self.get_audio_features(segment.clone()))
-                .collect();
-            let mut all_tokens: Vec<i32> = vec![];
-            for audio_feature in audio_features {
-                let tokens = self.inference(audio_feature, all_tokens.clone(), language);
-                all_tokens.extend(tokens.clone());
-            }
-            result = vec![all_tokens]
-            // result = segments
-            //     .par_iter()
-            //     .map(|segment| self.inference(self.get_audio_features(segment.clone()), language))
-            //     .collect();
+        let audio_features: Vec<ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>>> = segments
+            .par_iter()
+            .map(|segment| self.get_audio_features(segment.clone()))
+            .collect();
+        let mut result: Vec<i32> = vec![];
+        for audio_feature in audio_features {
+            let tokens = self.inference(audio_feature, result.clone(), language);
+            result.extend(tokens.clone());
         }
 
-        let final_result: Vec<i32> = result.into_iter().flat_map(|v| v.into_iter()).collect();
-
         self.tokenizer.decode(
-            final_result
+            result
                 .iter()
                 .map(|v| *v as usize)
                 .filter(|item| item < &50257)
@@ -368,14 +246,9 @@ impl Whisper {
         )
     }
 
-    pub fn recognize_from_audio(
-        &self,
-        audio_path: &str,
-        beam_size: usize,
-        language: &str,
-    ) -> String {
+    pub fn recognize_from_audio(&self, audio_path: &str, language: &str) -> String {
         let audio_data = read_audio(audio_path).unwrap();
         let mel = audio::log_mel_spectrogram(audio_data, self.mel_filters.clone());
-        self.run(mel, beam_size, language)
+        self.run(mel, language)
     }
 }

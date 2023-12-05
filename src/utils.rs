@@ -1,26 +1,5 @@
-use rayon::prelude::*;
-use tract_ndarray::{Array3, ArrayBase, Dim, OwnedRepr};
+use tract_ndarray::{Array3, Dim};
 use tract_onnx::prelude::*;
-
-#[derive(Debug, Clone)]
-pub struct BeamNode {
-    pub tokens: ArrayBase<OwnedRepr<i32>, Dim<[usize; 2]>>,
-    pub score: f32,
-    pub kv_cache: KVCache,
-}
-
-pub fn get_top_indices(arr: Vec<f32>, n: usize) -> Vec<(usize, f32)> {
-    let mut indexed_values: Vec<(usize, f32)> = arr
-        .iter()
-        .enumerate()
-        .map(|(index, &value)| (index, value))
-        .collect();
-    indexed_values.par_sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-    let top_n: Vec<(usize, f32)> = indexed_values.into_iter().take(n).collect();
-
-    return top_n;
-}
 
 #[derive(Debug)]
 pub struct Options {
