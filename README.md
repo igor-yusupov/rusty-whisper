@@ -6,7 +6,7 @@ This crate is based on [tract](https://github.com/sonos/tract).
 
 ## Quick start
 
-Download [weights](https://www.dropbox.com/scl/fi/r92pn94756qtxiiu2md0s/weights.zip?rlkey=dmrgkf1m9lg3pib00qpb4kd62&dl=1) and [example audio file](https://www.dropbox.com/scl/fi/8yzo8y2ptxoy0rfuon9bu/audio.wav?rlkey=dorb43edb48bqpx5cgrtckxlk&dl=1) and run simple inference code:
+Download [weights](https://www.dropbox.com/scl/fi/obq73jdswc9yfu2f8ctwo/weights.zip?rlkey=iuofo1dbf2xo6hiu9io6ovh5i&dl=1) and [example audio file](https://www.dropbox.com/scl/fi/8yzo8y2ptxoy0rfuon9bu/audio.wav?rlkey=dorb43edb48bqpx5cgrtckxlk&dl=1) and run simple inference code:
 
 ```
 use rusty_whisper::Whisper;
